@@ -13,8 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Use minimal AVR emulation instead of simavr */
-#include "mini_avr_emu.h"
+/* sim-arduboy headers */
+#include "sim_arduboy.h"
+#include "arduboy_avr.h"
+#include "simavr/examples/parts/ssd1306_virt.h"
 
 /*********************
  *      DEFINES
@@ -68,14 +70,16 @@ static void arduboy_key_event_cb(lv_event_t *e);
 static inline lv_color_t gray_u8_to_rgb(uint8_t v);
 static void calculate_display_scaling(int32_t screen_width, int32_t screen_height);
 static void create_canvas(void);
-static void update_display_from_avr(void);
 
 /**********************
- *   MINIMAL AVR INTEGRATION FUNCTIONS
+ *   SSD1306 GL REPLACEMENT FUNCTIONS
  **********************/
 
 /**
- * Initialize the LVGL canvas renderer
+ * Initialize the LVGL canvas renderer (replaces ssd1306_gl_init)
+ * @param pixel_size Unused - kept for compatibility
+ * @param win_width Unused - kept for compatibility  
+ * @param win_height Unused - kept for compatibility
  */
 void ssd1306_gl_init(float pixel_size, int win_width, int win_height)
 {
@@ -97,85 +101,104 @@ void ssd1306_gl_init(float pixel_size, int win_width, int win_height)
 
     /* Calculate optimal scaling and positioning */
     calculate_display_scaling(screen_width, screen_height);
-
-    /* Create the canvas */
+    
+    /* Create and configure the canvas */
     create_canvas();
-
+    
     g_ctx.initialized = true;
 }
 
 /**
- * Update the display from AVR emulation
+ * Cleanup LVGL canvas renderer resources
  */
-void ssd1306_gl_update_lumamap(void *ssd1306, const uint8_t luma_decay, const uint8_t luma_inc)
+void ssd1306_gl_cleanup(void)
 {
-    LV_UNUSED(ssd1306);
-    LV_UNUSED(luma_decay);
-    LV_UNUSED(luma_inc);
-
-    /* Update display from AVR emulation */
-    update_display_from_avr();
+    if (g_ctx.initialized) {
+        /* Static buffer doesn't need freeing, just delete the canvas */
+        if (g_ctx.canvas) {
+            lv_obj_delete(g_ctx.canvas);
+            g_ctx.canvas = NULL;
+        }
+        g_ctx.initialized = false;
+    }
 }
 
 /**
- * Render the display to LVGL canvas
+ * Update the luminance map from SSD1306 VRAM data
+ * @param ssd1306 Pointer to SSD1306 virtual device
+ * @param luma_decay Luminance decay factor
+ * @param luma_inc Luminance increment factor
  */
-void ssd1306_gl_render(void *ssd1306)
+void ssd1306_gl_update_lumamap(struct ssd1306_t *ssd1306, const uint8_t luma_decay, const uint8_t luma_inc)
+{
+    /* Process VRAM data to create grayscale luminance map */
+    uint8_t *column_ptr = g_ctx.luma_pixmap;
+    
+    for (int page = 0; page < (OLED_HEIGHT / 8); page++) {
+        for (int col = 0; col < OLED_WIDTH; col++) {
+            uint8_t px_col = ssd1306->vram[page][col];
+            
+            for (int bit = 0; bit < 8; bit++) {
+                int index = bit * OLED_WIDTH; /* step by one row chunk */
+                int16_t luma = column_ptr[index];
+                
+                /* Apply luminance decay and increment */
+                luma -= luma_decay;
+                if (px_col & 0x1) luma += luma_inc;
+                
+                /* Clamp luminance to valid range */
+                if (luma < 0) luma = 0; 
+                else if (luma > 255) luma = 255;
+                
+                column_ptr[index] = (uint8_t)luma;
+                px_col >>= 1;
+            }
+            column_ptr++;
+        }
+        column_ptr += OLED_WIDTH * 7;
+    }
+}
+
+/**
+ * Render the luminance map to the LVGL canvas
+ * @param ssd1306 Unused - kept for compatibility
+ */
+void ssd1306_gl_render(struct ssd1306_t *ssd1306)
 {
     LV_UNUSED(ssd1306);
 
+    /* Safety check - don't render if not initialized */
     if (!g_ctx.initialized || !g_ctx.canvas) {
         return;
     }
 
-    /* Get display buffer from AVR emulation */
-    uint8_t *display_buffer = mini_avr_get_display_buffer();
-    if (!display_buffer) {
-        return;
-    }
+    /* Clear canvas to black background */
+    lv_canvas_fill_bg(g_ctx.canvas, lv_color_black(), LV_OPA_COVER);
 
-    /* Convert display buffer to canvas pixels */
-    for (int y = 0; y < g_ctx.canvas_height; y++) {
-        for (int x = 0; x < g_ctx.canvas_width; x++) {
-            int src_x = x / g_ctx.scale;
-            int src_y = y / g_ctx.scale;
+    /* Draw scaled pixels to canvas buffer */
+    const int scale = g_ctx.scale;
+    for (int y = 0; y < OLED_HEIGHT; y++) {
+        for (int x = 0; x < OLED_WIDTH; x++) {
+            uint8_t luminance = g_ctx.luma_pixmap[y * OLED_WIDTH + x];
+            lv_color_t color = gray_u8_to_rgb(luminance);
             
-            if (src_x < OLED_WIDTH && src_y < OLED_HEIGHT) {
-                int byte_index = (src_y / 8) * OLED_WIDTH + src_x;
-                int bit_index = src_y % 8;
-                
-                if (byte_index < (OLED_WIDTH * OLED_HEIGHT / 8)) {
-                    uint8_t pixel = (display_buffer[byte_index] >> bit_index) & 1;
-                    lv_color_t color = pixel ? lv_color_white() : lv_color_black();
-                    
-                    lv_canvas_set_px_color(g_ctx.canvas, x, y, color);
+            /* Fill a scaled block for each original pixel */
+            for (int dy = 0; dy < scale; dy++) {
+                for (int dx = 0; dx < scale; dx++) {
+                    lv_canvas_set_px(g_ctx.canvas, x * scale + dx, y * scale + dy, color, LV_OPA_COVER);
                 }
             }
         }
     }
-
-    /* Invalidate the canvas to trigger redraw */
-    lv_obj_invalidate(g_ctx.canvas);
-}
-
-/**
- * Cleanup display resources
- */
-void ssd1306_gl_cleanup(void)
-{
-    if (g_ctx.canvas) {
-        lv_obj_del(g_ctx.canvas);
-        g_ctx.canvas = NULL;
-    }
-    g_ctx.initialized = false;
 }
 
 /**********************
- *   ARDUBOY EMULATOR FUNCTIONS
+ *   GLOBAL FUNCTIONS
  **********************/
 
 /**
  * Initialize Arduboy emulator app
+ * Currently a no-op, kept for API compatibility
  */
 void lv_arduboy_emu_app(void)
 {
@@ -188,13 +211,27 @@ void lv_arduboy_emu_app(void)
  */
 void arduboy_emu_start(const char *hex_path)
 {
-    LV_UNUSED(hex_path);
-
-    /* Initialize minimal AVR emulation with embedded firmware */
-    extern const uint8_t firmware_2048_data[];
-    extern const uint32_t firmware_2048_size;
+    /* Configure emulator options */
+    static struct sim_arduboy_opts opts;
+    memset(&opts, 0, sizeof(opts));
     
-    if (mini_avr_init(firmware_2048_data, firmware_2048_size) != 0) {
+    opts.gdb_port = 1234;
+    opts.pixel_size = 2;
+    opts.key2btn = NULL;  /* Use LVGL key handling instead */
+    
+    /* Set firmware path */
+    if (hex_path && hex_path[0]) {
+        opts.hex_file_path = (char *)hex_path;
+    } else {
+        opts.hex_file_path = NULL; /* fall back to embedded firmware */
+    }
+    
+    /* Set window dimensions */
+    opts.win_width = OLED_WIDTH * opts.pixel_size;
+    opts.win_height = OLED_HEIGHT * opts.pixel_size;
+
+    /* Initialize AVR emulation */
+    if (arduboy_avr_setup(&opts) != 0) {
         return;
     }
 
@@ -213,11 +250,13 @@ void arduboy_emu_start(const char *hex_path)
  */
 void lv_arduboy_emu_app_handle_input(uint32_t key)
 {
+    extern void arduboy_avr_button_event(enum button_e btn_e, bool pressed);
+    
     int button_index = key_to_button_e(key);
     if (button_index >= 0 && button_index < BUTTON_COUNT) {
         if (!key_states[button_index]) {
             /* Key press - send button event to emulator */
-            mini_avr_button_event((button_e)button_index, true);
+            arduboy_avr_button_event((enum button_e)button_index, true);
             key_states[button_index] = true;
             
             /* Set up auto-release after short delay */
@@ -228,15 +267,6 @@ void lv_arduboy_emu_app_handle_input(uint32_t key)
             }
         }
     }
-}
-
-/**
- * Run AVR emulation step
- */
-void arduboy_avr_loop(void)
-{
-    /* Run one step of the minimal AVR emulation */
-    mini_avr_step();
 }
 
 /**********************
@@ -270,11 +300,12 @@ static inline int key_to_button_e(uint32_t key)
 static void key_release_timer_cb(lv_timer_t *timer)
 {
     LV_UNUSED(timer);
+    extern void arduboy_avr_button_event(enum button_e btn_e, bool pressed);
     
     /* Release all pressed buttons */
     for (int i = 0; i < BUTTON_COUNT; i++) {
         if (key_states[i]) {
-            mini_avr_button_event((button_e)i, false);
+            arduboy_avr_button_event((enum button_e)i, false);
             key_states[i] = false;
         }
     }
@@ -349,13 +380,4 @@ static void create_canvas(void)
 
     /* Initialize with black background */
     lv_canvas_fill_bg(g_ctx.canvas, lv_color_black(), LV_OPA_COVER);
-}
-
-/**
- * Update display from AVR emulation
- */
-static void update_display_from_avr(void)
-{
-    /* This function is called periodically to update the display */
-    /* The actual display update is handled in ssd1306_gl_render() */
 }
