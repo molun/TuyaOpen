@@ -38,7 +38,6 @@
 #include "avr_ioport.h"
 #include "sim_elf.h"
 #include "sim_hex.h"
-#include "sim_gdb.h"
 #include "uart_pty.h"
 #include "sim_vcd_file.h"
 

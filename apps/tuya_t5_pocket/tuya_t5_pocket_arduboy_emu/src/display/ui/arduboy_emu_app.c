@@ -16,7 +16,7 @@
 /* sim-arduboy headers */
 #include "sim_arduboy.h"
 #include "arduboy_avr.h"
-#include "simavr/examples/parts/ssd1306_virt.h"
+#include "simavr/parts/ssd1306_virt.h"
 
 /*********************
  *      DEFINES

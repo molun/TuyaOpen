@@ -28,7 +28,6 @@
 #include "sim_avr.h"
 #include "avr_ioport.h"
 #include "sim_elf.h"
-#include "sim_gdb.h"
 
 #if __APPLE__
 #include <GLUT/glut.h>

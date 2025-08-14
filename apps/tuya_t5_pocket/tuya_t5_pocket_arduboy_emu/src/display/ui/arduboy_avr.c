@@ -28,14 +28,15 @@
 /* Include Tuya system APIs */
 #include "tkl_system.h"
 
-#include <sim_avr.h>
-#include <avr_adc.h>
-#include <avr_ioport.h>
-#include <avr_extint.h>
-#include <sim_hex.h>
-#include <sim_gdb.h>
-#include <sim_time.h>
-#include <ssd1306_virt.h>
+#include "simavr/sim_avr.h"
+#include "simavr/avr_adc.h"
+#include "simavr/avr_ioport.h"
+#include "simavr/avr_extint.h"
+#include "simavr/sim_io.h"
+#include "simavr/sim_hex.h"
+// #include <sim_gdb.h>
+#include "simavr/sim_time.h"
+#include "simavr/parts/ssd1306_virt.h"
 
 #include "sim_arduboy.h"
 #include "arduboy_avr.h"
@@ -85,14 +86,35 @@ static struct arduboy_avr_mod_state {
 } mod_s;
 
 /*
-Sleep callback using Tuya system tick count for embedded systems
+Sleep callback for embedded systems - simplified timing sync
 */
 static void avr_callback_sleep_sync(
 		avr_t *avr,
 		avr_cycle_count_t how_long)
 {
-	/* For embedded systems, just yield control instead of timing sync */
-	mod_s.yield = true;
+	/* For embedded systems, use a simplified timing approach */
+	/* Calculate how long we should wait in microseconds */
+	uint64_t sleep_us = avr_cycles_to_usec(avr, how_long);
+	
+	/* For very short sleeps, just yield control */
+	if (sleep_us < 100) {
+		mod_s.yield = true;
+		return;
+	}
+	
+	/* For longer sleeps, use Tuya system delay */
+	tkl_system_sleep(sleep_us / 1000); /* Convert to milliseconds */
+}
+
+/*
+Platform time source callback for embedded systems
+*/
+static uint64_t avr_platform_time_ns(avr_t *avr)
+{
+	(void)avr;
+	/* Use Tuya system ticks converted to nanoseconds */
+	SYS_TICK_T ticks = tkl_system_get_tick_count();
+	return (uint64_t)ticks * 1000000ull; /* Convert ticks to nanoseconds */
 }
 
 static avr_cycle_count_t update_luma(
@@ -110,7 +132,7 @@ static avr_cycle_count_t render_timer_callback(
 			void *param)
 {
     ssd1306_gl_render(param);
-	mod_s.yield = true;
+	/* Don't force yield here - let the main loop control timing */
 	return avr->cycle + avr_usec_to_cycles(avr, GL_FRAME_PERIOD_US);
 }
 
@@ -197,7 +219,11 @@ int arduboy_avr_setup(struct sim_arduboy_opts *opts)
 	/* more simulation parameters */
 	avr->log = 1 + opts->verbose;
 	avr->frequency = MHZ_16;
+	
+	/* Set up platform-specific callbacks */
 	avr->sleep = avr_callback_sleep_sync;
+	avr_set_platform_time_source(avr, avr_platform_time_ns);
+	
 	avr->run_cycle_limit = avr_usec_to_cycles(avr, 2*GL_FRAME_PERIOD_US);
 	avr->aref = ADC_VREF_V256;
 
@@ -217,7 +243,7 @@ int arduboy_avr_setup(struct sim_arduboy_opts *opts)
 		avr_raise_irq(binfo->irq, 1);
 	}
 
-	/* Take simulation start time */
+	/* Take simulation start time using Tuya system ticks */
 	mod_s.start_time_ticks = tkl_system_get_tick_count();
 
 	/* Setup display render timers */
@@ -233,10 +259,6 @@ int arduboy_avr_setup(struct sim_arduboy_opts *opts)
 
 	/* setup for GDB debugging */
 	avr->gdb_port = opts->gdb_port;
-	if (opts->debug) {
-		avr->state = cpu_Stopped;
-		avr_gdb_init(avr);
-	}
 
 	mod_s.avr = avr;
 	return 0;

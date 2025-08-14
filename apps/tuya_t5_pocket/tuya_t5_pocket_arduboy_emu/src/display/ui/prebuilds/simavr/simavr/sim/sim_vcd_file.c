@@ -34,7 +34,9 @@
 
 DEFINE_FIFO(avr_vcd_log_t, avr_vcd_fifo);
 
+#ifndef strdupa
 #define strdupa(__s) strcpy(alloca(strlen(__s)+1), __s)
+#endif
 
 static void
 _avr_vcd_notify(

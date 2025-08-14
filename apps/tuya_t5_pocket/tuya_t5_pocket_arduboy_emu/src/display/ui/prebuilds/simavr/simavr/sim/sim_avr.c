@@ -97,9 +97,9 @@ avr_get_time_stamp(
     if (g_platform_time_ns) {
         stamp = g_platform_time_ns(avr);
     } else {
-        struct timespec tp;
-        clock_gettime(CLOCK_MONOTONIC, &tp);
-        stamp = (uint64_t)tp.tv_sec * 1000000000ull + (uint64_t)tp.tv_nsec;
+        // Fallback to a simple counter for embedded systems
+        static uint64_t fallback_counter = 0;
+        stamp = fallback_counter++;
     }
     if (!avr->time_base)
         avr->time_base = stamp;
@@ -131,9 +131,9 @@ avr_init(
 		avr->custom.init(avr, avr->custom.data);
 	if (avr->init)
 		avr->init(avr);
-    // set default (non gdb) fast callbacks
+    // set default callbacks - sleep will be set by platform
     avr->run = avr_callback_run_raw;
-    avr->sleep = avr_callback_sleep_raw;
+    avr->sleep = NULL; // Will be set by platform-specific code
 	// number of address bytes to push/pull on/off the stack
 	avr->address_size = avr->eind ? 3 : 2;
 	avr->log = 1;
@@ -333,31 +333,16 @@ avr_callback_run_gdb(
 }
 
 /*
-To avoid simulated time and wall clock time to diverge over time
-this function tries to keep them in sync (roughly) by sleeping
-for the time required to match the expected sleep deadline
-in wall clock time.
+Legacy sleep callback - now deprecated in favor of platform-specific callbacks
 */
 void
 avr_callback_sleep_raw(
 		avr_t *avr,
 		avr_cycle_count_t how_long)
 {
-	/* figure out how long we should wait to match the sleep deadline */
-	uint64_t deadline_ns = avr_cycles_to_nsec(avr, avr->cycle + how_long);
-	uint64_t runtime_ns = avr_get_time_stamp(avr);
-	if (runtime_ns >= deadline_ns)
-		return;
-	uint64_t sleep_us = (deadline_ns - runtime_ns) / 1000;
-    if (g_platform_sleep_us) {
-        g_platform_sleep_us(avr, (uint32_t)sleep_us);
-    } else {
-        struct timespec ts;
-        ts.tv_sec = sleep_us / 1000000ull;
-        ts.tv_nsec = (sleep_us % 1000000ull) * 1000ull;
-        nanosleep(&ts, NULL);
-    }
-	return;
+	// This function is deprecated - use platform-specific sleep callbacks instead
+	(void)avr;
+	(void)how_long;
 }
 
 void

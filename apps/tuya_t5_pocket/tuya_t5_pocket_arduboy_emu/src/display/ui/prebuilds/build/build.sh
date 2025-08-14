@@ -24,10 +24,13 @@ JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN || echo 4)}
 VERBOSE=${V:-0}
 
 usage() {
-  echo "Usage: $0 [--clean] [--rebuild] [--out DIR]"
+  echo "Usage: $0 [--clean] [--rebuild] [--out DIR] [--arm-gcc PATH]"
   echo "  --clean     Remove build artifacts and output directory"
   echo "  --rebuild   Clean first, then build"
   echo "  --out DIR   Output directory (default: ${OUT_DIR})"
+  echo "  --arm-gcc PATH  ARM GCC toolchain path (default: ${ARM_GCC_ROOT})"
+  echo ""
+  echo "Note: This build script forces ARM bare metal cross-compilation"
 }
 
 CLEAN=0
@@ -46,6 +49,9 @@ while [[ $# -gt 0 ]]; do
       OUT_DIR="$2"; shift 2
       OUT_INCLUDE_DIR="${OUT_DIR}/include"
       OUT_LIB_DIR="${OUT_DIR}/lib"
+      ;;
+    --arm-gcc)
+      ARM_GCC_ROOT="$2"; shift 2
       ;;
     -h|--help)
       usage; exit 0
@@ -93,15 +99,19 @@ build_libelf() {
   log "Configuring elfutils (for libelf only)"
   pushd "${ELFUTILS_DIR}" >/dev/null
 
-  # Configure for native build; disable components we don't need
+  # libelf must be built natively (can't use bare metal toolchain)
+  # but simavr will use ARM bare metal toolchain
+  log "Building libelf with native compiler (required for cross-compilation)"
+  CC_FOR_BUILD=${CC:-gcc}
+  CFLAGS_FOR_BUILD=${CFLAGS:-"-O2"}
+  HOST_FLAG=""
+
+  # Configure for build; disable components we don't need
   # We build in-tree due to elfutils' build system simplicity
   if [[ ! -f Makefile ]]; then
-    # Prefer clang/gcc available on host
-    CC_FOR_BUILD=${CC:-gcc}
-    CFLAGS_FOR_BUILD=${CFLAGS:-"-O2"}
     log "Running ./configure with CC=${CC_FOR_BUILD}"
     CC="${CC_FOR_BUILD}" CFLAGS="${CFLAGS_FOR_BUILD}" \
-      ./configure \
+      ./configure ${HOST_FLAG} \
         --disable-debuginfod \
         --disable-libdebuginfod \
         --disable-nls || { echo "elfutils configure failed"; exit 1; }
@@ -130,15 +140,30 @@ build_simavr() {
   log "Building simavr (using libelf from ${OUT_DIR})"
   pushd "${SIMAVR_DIR}" >/dev/null
 
+  # Force ARM bare metal toolchain for simavr
+  if [[ ! -f "${ARM_GCC_ROOT}/bin/arm-none-eabi-gcc" ]]; then
+    echo "Error: ARM cross-compiler not found at ${ARM_GCC_ROOT}/bin/arm-none-eabi-gcc"
+    exit 1
+  fi
+  log "Using ARM bare metal cross-compiler: ${ARM_GCC_ROOT}/bin/arm-none-eabi-gcc"
+  log "Note: This will build simavr for ARM bare metal targets"
+  CC="${ARM_GCC_ROOT}/bin/arm-none-eabi-gcc"
+  AR="${ARM_GCC_ROOT}/bin/arm-none-eabi-ar"
+  RANLIB="${ARM_GCC_ROOT}/bin/arm-none-eabi-ranlib"
+  # Add flags for bare metal compilation with POSIX support
+  CFLAGS="${CFLAGS:-} -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wno-error=format -Wno-error=char-subscripts -Wno-format -Wno-char-subscripts"
+
   # Pass include and lib paths via environment
   IPATH="${OUT_INCLUDE_DIR}" \
   LDFLAGS="-L${OUT_LIB_DIR} -lelf -leu -lz -lzstd ${LDFLAGS:-}" \
   CFLAGS="${CFLAGS:-} -Wno-error -Wno-stringop-truncation" \
+  CC="${CC}" AR="${AR}" RANLIB="${RANLIB}" \
   JOBS=1 run_make -C simavr config
 
   IPATH="${OUT_INCLUDE_DIR}" \
   LDFLAGS="-L${OUT_LIB_DIR} -lelf -leu -lz -lzstd ${LDFLAGS:-}" \
   CFLAGS="${CFLAGS:-} -Wno-error -Wno-stringop-truncation" \
+  CC="${CC}" AR="${AR}" RANLIB="${RANLIB}" \
   run_make -C simavr libsimavr
 
   # Collect artifacts
