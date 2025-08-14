@@ -11,42 +11,39 @@ list(APPEND APP_MODULE_SRCS
 
 aux_source_directory(${APP_MODULE_PATH}/ui UI_SRCS)
 
-
 list(APPEND APP_MODULE_SRCS
     ${UI_SRCS}
 )
 
-set(APP_MODULE_INC 
+# Use prebuilt libelf and simavr from prebuild orchestrator output
+set(PREBUILD_OUTPUT_DIR ${APP_MODULE_PATH}/ui/prebuilds/output)
+set(PREBUILD_INCLUDE_DIR ${PREBUILD_OUTPUT_DIR}/include)
+set(PREBUILD_LIB_DIR ${PREBUILD_OUTPUT_DIR}/lib)
+
+set(APP_MODULE_INC
     ${APP_MODULE_PATH}
     ${APP_MODULE_PATH}/ui
-    ${APP_MODULE_PATH}/ui/simavr/simavr/sim
-    ${APP_MODULE_PATH}/ui/simavr/examples/parts
+    ${PREBUILD_INCLUDE_DIR}
+    ${PREBUILD_INCLUDE_DIR}/simavr
+    ${PREBUILD_INCLUDE_DIR}/simavr/avr
+    ${PREBUILD_INCLUDE_DIR}/simavr/parts
 )
 
-# Build simavr static library via its makefile and link it
-execute_process(
-    COMMAND ${CMAKE_C_COMPILER} -dumpmachine
-    OUTPUT_VARIABLE GCC_DUMP_MACHINE
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
+# Import prebuilt static libraries directly by absolute path
+set(PREBUILD_LIB_LIBELF ${PREBUILD_LIB_DIR}/libelf.a)
+set(PREBUILD_LIB_LIBEU  ${PREBUILD_LIB_DIR}/libeu.a)
+set(PREBUILD_LIB_SIMAVR ${PREBUILD_LIB_DIR}/libsimavr.a)
 
-set(SIMAVR_DIR ${APP_MODULE_PATH}/ui/simavr)
-set(SIMAVR_BIN_DIR ${SIMAVR_DIR}/simavr)
-set(SIMAVR_OBJ_DIR ${SIMAVR_BIN_DIR}/obj-${GCC_DUMP_MACHINE})
-set(SIMAVR_LIB ${SIMAVR_OBJ_DIR}/libsimavr.a)
+add_library(libelf STATIC IMPORTED)
+set_target_properties(libelf PROPERTIES IMPORTED_LOCATION ${PREBUILD_LIB_LIBELF})
 
-add_custom_command(
-    OUTPUT ${SIMAVR_LIB}
-    COMMAND make -C ${SIMAVR_BIN_DIR} libsimavr
-    WORKING_DIRECTORY ${SIMAVR_BIN_DIR}
-    COMMENT "Building simavr static library"
-)
-
-add_custom_target(simavr_build DEPENDS ${SIMAVR_LIB})
+if(EXISTS ${PREBUILD_LIB_LIBEU})
+    add_library(libeu STATIC IMPORTED)
+    set_target_properties(libeu PROPERTIES IMPORTED_LOCATION ${PREBUILD_LIB_LIBEU})
+endif()
 
 add_library(simavr STATIC IMPORTED)
-set_target_properties(simavr PROPERTIES IMPORTED_LOCATION ${SIMAVR_LIB})
-add_dependencies(simavr simavr_build)
+set_target_properties(simavr PROPERTIES IMPORTED_LOCATION ${PREBUILD_LIB_SIMAVR})
 
 ########################################
 # Target Configure
@@ -59,6 +56,10 @@ target_sources(${EXAMPLE_LIB}
 target_include_directories(${EXAMPLE_LIB}
     PRIVATE
         ${APP_MODULE_INC}
-    )
+)
 
-target_link_libraries(${EXAMPLE_LIB} simavr elf)
+if(TARGET libeu)
+    target_link_libraries(${EXAMPLE_LIB} simavr libelf libeu z zstd)
+else()
+    target_link_libraries(${EXAMPLE_LIB} simavr libelf z zstd)
+endif()
