@@ -49,8 +49,6 @@ void user_main(void)
 {
     int ret = OPRT_OK;
 
-    //! open iot development kit runtim init
-    cJSON_InitHooks(&(cJSON_Hooks){.malloc_fn = tal_malloc, .free_fn = tal_free});
     tal_log_init(TAL_LOG_LEVEL_DEBUG, 1024, (TAL_LOG_OUTPUT_CB)tkl_log_output);
 
     PR_NOTICE("Application information:");

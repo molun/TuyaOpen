@@ -7,6 +7,7 @@
 
 #include "app_pocket.h"
 #include "app_display.h"
+#include <stdio.h>
 
 /***********************************************************
 ************************macro define************************
@@ -24,18 +25,7 @@
 ***********************function define**********************
 ***********************************************************/
 
-/**
- * @brief Register hardware components for the pocket device
- *
- * @param None
- * @return OPERATE_RET Registration result, OPRT_OK indicates success
- */
-OPERATE_RET board_register_hardware(void)
-{
-    /* For Arduboy emulator, we don't need to register specific hardware
-       as the display and input handling is managed by the display system */
-    return OPRT_OK;
-}
+/* Remove local implementation to use board's implementation */
 
 /**
  * @brief Initialize the pocket application
@@ -47,11 +37,15 @@ OPERATE_RET app_pocket_init(void)
 {
     OPERATE_RET rt = OPRT_OK;
 
+    printf("Starting app_pocket_init");
+
     /* Initialize the display system */
     rt = app_display_init();
     if (rt != OPRT_OK) {
+        printf("app_display_init failed: %d", rt);
         return rt;
     }
 
+    printf("app_pocket_init completed successfully");
     return OPRT_OK;
 }
